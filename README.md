@@ -42,11 +42,23 @@ outside the scope of this version.
    version has no key migration. Keep secrets out of Git and Buzz.
 
 5. In Buzz, open **Settings → Plugins → Manage plugins → Add → Browse** and
-   select the `buzz/` folder. Open **Settings → Integrations → Oura**, save your Worker origin, and
-   select **Open Oura sign-in in browser**. Sign in to the Worker through Cloudflare
-   Access, then connect your Oura account. The plugin shows the callback and
-   API URLs. **Test connection in browser** checks the linked account once
-   you deploy a Worker with the status route.
+   select the `buzz/` folder. Open **Settings → Integrations → Oura**, enter
+   your Worker URL, and choose **Sign in to Oura**. Cloudflare Access signs
+   you into the Worker, then the Worker opens Oura authorization. Use
+   **Test connection** to see the result in the authenticated browser.
+   The Buzz card shows whether setup is required or the connection still
+   needs to be verified in the browser.
+
+   **Advanced URLs** lets you override the sign-in and connection test
+   routes on the same Worker. The defaults are `/account` and
+   `/account/status`. The **Oura developer settings** section shows the
+   redirect URI to register for the saved Worker.
+
+   For a custom provider deployment, set the optional Worker variables
+   `OURA_AUTHORIZE_URL`, `OURA_TOKEN_URL`, and `OURA_API_BASE_URL` in your
+   Wrangler configuration. The defaults are Oura’s public HTTPS endpoints.
+   An operator should set these only to endpoints they trust with their
+   OAuth credentials and tokens.
 
 Disconnect removes the token envelope from the live D1 database. To revoke
 the provider grant itself, remove the app from your Oura account settings.

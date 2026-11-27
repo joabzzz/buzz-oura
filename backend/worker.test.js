@@ -206,7 +206,8 @@ test("checks only the signed-in account and never returns Oura data", async () =
     return Response.json({ data: ["private-test-record"] }, { status });
   });
   assert.equal((await send("/account/status", { owner: "" })).status, 401);
-  assert.match(await (await send("/account/status")).text(), /No Oura account/);
+  assert.match(await (await send("/account")).text(), /<button>Sign in to Oura<\/button>/);
+  assert.match(await (await send("/account/status")).text(), /class="badge">Disconnected</);
   assert.equal((await send(await authorize(send))).status, 303);
   assert.match(
     await (await send("/account/status", { owner: "bob" })).text(),
@@ -214,10 +215,15 @@ test("checks only the signed-in account and never returns Oura data", async () =
   );
   assert.equal(checks, 0);
   const html = await (await send("/account/status")).text();
+  assert.match(html, /class="badge">Connected</);
   assert.match(html, /Oura accepted the API request/);
   assert.doesNotMatch(html, /private-test-record|access-token-test/);
   status = 401;
-  assert.equal((await send("/account/status")).status, 409);
+  const rejected = await send("/account/status");
+  assert.equal(rejected.status, 409);
+  assert.match(await rejected.text(), /class="badge">Reconnect required</);
   status = 429;
-  assert.equal((await send("/account/status")).status, 502);
+  const unavailable = await send("/account/status");
+  assert.equal(unavailable.status, 502);
+  assert.match(await unavailable.text(), /class="badge">Test failed</);
 });

@@ -72,11 +72,43 @@ async function readToken(stored, owner, key) {
   return JSON.parse(new TextDecoder().decode(plaintext));
 }
 
-function connectionStatus(message, status = 200) {
+function providerEndpoint(value) {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash)
+    throw new Error("Invalid Oura endpoint");
+  return url.href;
+}
+
+const accountStyle = `<style>
+  :root { color-scheme: light dark; font: 1rem/1.55 system-ui, sans-serif; }
+  main { max-width: 34rem; margin: 12vh auto; padding: 1.5rem; }
+  h1 { margin: 0 0 .5rem; line-height: 1.15; }
+  .badge { display: inline-block; border: 1px solid; border-radius: 2rem; padding: .15rem .65rem; font-weight: 600; }
+  .actions { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+  button, .action { display: inline-block; font: inherit; font-weight: 600; padding: .45rem .8rem; border: 1px solid; border-radius: .5rem; cursor: pointer; }
+  button { background: CanvasText; color: Canvas; }
+  .action { color: inherit; text-decoration: none; }
+</style>`;
+const accountPageHeaders = {
+  "Content-Type": "text/html; charset=utf-8",
+  "Content-Security-Policy": headers["Content-Security-Policy"] + "; style-src 'unsafe-inline'",
+};
+
+function accountPage(title, badge, message, actions, status = 200) {
   return reply(
-    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Oura connection status</title><main><h1>Oura connection status</h1><p>${message}</p><a href="/account">Manage Oura account</a></main></html>`,
+    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>${accountStyle}<main><h1>${title}</h1><span class="badge">${badge}</span><p>${message}</p><div class="actions">${actions}</div></main></html>`,
     status,
-    { "Content-Type": "text/html; charset=utf-8" },
+    accountPageHeaders,
+  );
+}
+
+function connectionStatus(message, status = 200, badge = "Test failed") {
+  return accountPage(
+    "Oura connection status",
+    badge,
+    message,
+    '<a class="action" href="/account">Manage Oura account</a>',
+    status,
   );
 }
 
@@ -151,16 +183,14 @@ export function createWorker({
               .prepare("SELECT 1 FROM oura_connections WHERE owner = ?")
               .bind(owner)
               .first();
-            const action = account
-              ? "/account/disconnect"
-              : "/oauth/oura/start";
-            const label = account
-              ? "Disconnect from this Worker"
-              : "Connect Oura";
-            return reply(
-              `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Oura account</title><main><h1>Oura account</h1><p>${account ? "Account linked. To revoke authorization at Oura, remove the app in your Oura account settings." : "Connect your Oura account to this deployment."}</p><form method="post" action="${action}"><button>${label}</button></form><p><a href="/account/status">Test connection</a></p></main></html>`,
-              200,
-              { "Content-Type": "text/html; charset=utf-8" },
+            const action = account ? "/account/disconnect" : "/oauth/oura/start";
+            const label = account ? "Disconnect Oura" : "Sign in to Oura";
+            const test = account ? '<a class="action" href="/account/status">Test connection</a>' : "";
+            return accountPage(
+              "Oura account",
+              account ? "Account linked" : "Disconnected",
+              account ? "Test your connection to check whether Oura accepts API requests." : "Sign in to link your Oura account.",
+              `<form method="post" action="${action}"><button>${label}</button></form>${test}`,
             );
           }
           case "/account/status": {
@@ -170,7 +200,7 @@ export function createWorker({
               )
               .bind(owner)
               .first();
-            if (!account) return connectionStatus("No Oura account is linked.");
+            if (!account) return connectionStatus("No Oura account is linked.", 200, "Disconnected");
             const token = await readToken(
               account.token_envelope,
               owner,
@@ -180,10 +210,15 @@ export function createWorker({
               return connectionStatus(
                 "The Oura token expired. Reconnect your Oura account.",
                 409,
+                "Reconnect required",
               );
 
+            const apiBase = providerEndpoint(
+              env.OURA_API_BASE_URL || "https://api.ouraring.com/v2",
+            );
             const endpoint = new URL(
-              "https://api.ouraring.com/v2/usercollection/daily_sleep",
+              "usercollection/daily_sleep",
+              apiBase.endsWith("/") ? apiBase : apiBase + "/",
             );
             const day = new Date().toISOString().slice(0, 10);
             endpoint.search = new URLSearchParams({
@@ -198,12 +233,13 @@ export function createWorker({
             await result.body?.cancel();
             if (result.ok)
               return connectionStatus(
-                "Connected. Oura accepted the API request.",
+                "Oura accepted the API request.", 200, "Connected",
               );
             if (result.status === 401 || result.status === 403)
               return connectionStatus(
                 "Oura rejected the token or its permissions. Reconnect your Oura account.",
                 409,
+                "Reconnect required",
               );
             return connectionStatus(
               "Oura could not complete the test. Try again later.",
@@ -236,7 +272,7 @@ export function createWorker({
               )
               .bind(owner, await hash(state), Date.now() + 600_000)
               .run();
-            const destination = new URL(authorizeUrl);
+            const destination = new URL(providerEndpoint(env.OURA_AUTHORIZE_URL || authorizeUrl));
             destination.search = new URLSearchParams({
               response_type: "code",
               client_id: env.OURA_CLIENT_ID,
@@ -270,7 +306,7 @@ export function createWorker({
                 400,
               );
 
-            const result = await exchange(tokenUrl, {
+            const result = await exchange(providerEndpoint(env.OURA_TOKEN_URL || tokenUrl), {
               method: "POST",
               redirect: "error",
               signal: AbortSignal.timeout(10_000),
