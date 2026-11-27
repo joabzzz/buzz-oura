@@ -74,8 +74,11 @@ const token = () =>
 
 async function authorize(send) {
   const start = await send("/oauth/oura/start", { method: "POST" });
-  assert.equal(start.status, 303);
-  const redirect = new URL(start.headers.get("Location"));
+  assert.equal(start.status, 200);
+  const html = await start.text();
+  const href = html.match(/href="([^"]+)">Open Oura sign-in/)[1];
+  assert.ok(html.includes(`content="0;url=${href}"`));
+  const redirect = new URL(href.replaceAll("&amp;", "&"));
   assert.equal(redirect.origin, "https://cloud.ouraring.com");
   assert.equal(redirect.searchParams.get("redirect_uri"), origin + callback);
   assert.ok(!redirect.href.includes("test-secret"));
@@ -89,6 +92,7 @@ test("authenticates, binds callback to the initiating account, encrypts tokens, 
   const { send, sqlite } = fixture(async (url, options) => {
     exchanges++;
     assert.equal(url, "https://api.ouraring.com/oauth/token");
+    assert.equal(options.redirect, "manual");
     assert.equal(options.body.get("client_secret"), "test-secret");
     assert.equal(options.body.get("code"), "test-code");
     return token();
@@ -201,6 +205,7 @@ test("checks only the signed-in account and never returns Oura data", async () =
   const { send } = fixture(token, async (url, options) => {
     checks++;
     assert.equal(url.origin, "https://api.ouraring.com");
+    assert.equal(options.redirect, "manual");
     assert.equal(url.pathname, "/v2/usercollection/daily_sleep");
     assert.equal(options.headers.Authorization, "Bearer access-token-test");
     return Response.json({ data: ["private-test-record"] }, { status });

@@ -1,11 +1,22 @@
 # Oura for Buzz
 
-Connect an Oura account from a Buzz page using a self-hosted Cloudflare
-Worker. This first version links and disconnects accounts. It requests
-Oura’s daily scope and stores encrypted OAuth tokens in D1, without storing wearable
-records. The connection test checks the daily API and discards its response. Each connection belongs to the authenticated
-Cloudflare Access user. Buzz community membership and sharing controls are
-outside the scope of this version.
+Connect an Oura account from Buzz using a Cloudflare Worker. The Worker requests
+Oura’s daily scope, stores encrypted OAuth tokens in D1, and discards the API
+response from a connection test.
+
+## Joabar pilot
+
+Open **Settings → Integrations → Oura → Sign in to Oura**. Verify your email in
+the browser. If your Oura account is already linked, select **Link to Buzz**.
+Otherwise authorize the app on Oura. Select **Return to Buzz** to see the
+connection in the desktop app. **Test connection** checks Oura and updates the
+badge. If your browser cannot reopen Buzz, use the connection code shown in
+the browser on the device that started sign-in.
+
+The pilot defaults to `https://wearables.joabar.xyz`. The plugin asks Buzz for
+permission to contact that Worker. The device credential is limited to
+connection status and testing. Oura tokens stay on the Worker. The connection
+status follows your Buzz identity on this device.
 
 ## Files
 
@@ -42,17 +53,11 @@ outside the scope of this version.
    version has no key migration. Keep secrets out of Git and Buzz.
 
 5. In Buzz, open **Settings → Plugins → Manage plugins → Add → Browse** and
-   select the `buzz/` folder. Open **Settings → Integrations → Oura**, enter
-   your Worker URL, and choose **Sign in to Oura**. Cloudflare Access signs
-   you into the Worker, then the Worker opens Oura authorization. Use
-   **Test connection** to see the result in the authenticated browser.
-   The Buzz card shows whether setup is required or the connection still
-   needs to be verified in the browser.
-
-   **Advanced URLs** lets you override the sign-in and connection test
-   routes on the same Worker. The defaults are `/account` and
-   `/account/status`. The **Oura developer settings** section shows the
-   redirect URI to register for the saved Worker.
+   select the `buzz/` folder. Open **Settings → Integrations → Oura →
+   Advanced settings** and save your Worker URL. **Sign in to Oura** and
+   **Test in browser** use the signed-in browser on self-hosted Workers.
+   Advanced settings also shows the OAuth redirect URI and lets you override
+   the same-origin sign-in and test routes.
 
    For a custom provider deployment, set the optional Worker variables
    `OURA_AUTHORIZE_URL`, `OURA_TOKEN_URL`, and `OURA_API_BASE_URL` in your

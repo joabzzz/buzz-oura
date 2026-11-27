@@ -6,7 +6,7 @@ const encoder = new TextEncoder();
 
 const headers = {
   "Cache-Control": "no-store",
-  "Referrer-Policy": "no-referrer",
+  "Referrer-Policy": "same-origin",
   "X-Content-Type-Options": "nosniff",
   "Content-Security-Policy":
     "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
@@ -227,7 +227,7 @@ export function createWorker({
             });
             const result = await fetchOura(endpoint, {
               headers: { Authorization: `Bearer ${token.accessToken}` },
-              redirect: "error",
+              redirect: "manual",
               signal: AbortSignal.timeout(10_000),
             });
             await result.body?.cancel();
@@ -280,7 +280,17 @@ export function createWorker({
               scope: "daily",
               state,
             }).toString();
-            return reply(null, 303, { Location: destination.href });
+            // Finish the same-origin form before navigating to Oura.
+            const href = destination.href
+              .replaceAll("&", "&amp;")
+              .replaceAll('"', "&quot;")
+              .replaceAll("<", "&lt;")
+              .replaceAll(">", "&gt;");
+            return reply(
+              `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url=${href}"><title>Continue to Oura</title>${accountStyle}<main><h1>Continue to Oura</h1><p><a class="action" href="${href}">Open Oura sign-in</a></p></main></html>`,
+              200,
+              accountPageHeaders,
+            );
           }
           case "/oauth/oura/callback": {
             const state = url.searchParams.get("state") || "";
@@ -308,7 +318,7 @@ export function createWorker({
 
             const result = await exchange(providerEndpoint(env.OURA_TOKEN_URL || tokenUrl), {
               method: "POST",
-              redirect: "error",
+              redirect: "manual",
               signal: AbortSignal.timeout(10_000),
               body: new URLSearchParams({
                 grant_type: "authorization_code",
