@@ -15,8 +15,16 @@ the browser on the device that started sign-in.
 
 The pilot defaults to `https://wearables.joabar.xyz`. The plugin asks Buzz for
 permission to contact that Worker. The device credential is limited to
-connection status and testing. Oura tokens stay on the Worker. The connection
-status follows your Buzz identity on this device.
+connection status and testing until you select **Enable sleep access** and
+approve it in the browser. This uses your existing Oura authorization. Oura
+tokens stay on the Worker. The connection follows your Buzz identity on this
+device.
+
+The plugin registers `oura_get_deep_sleep` on Buzz's MCP server. The tool lets
+your agents read up to 30 nights of deep-sleep durations in a private
+one-on-one chat with you. Ask for a chart in that chat to use Buzz's native
+Charts plugin. Sleep access requires the Joabar pilot Worker. Disconnecting
+Oura from its account page revokes the linked Buzz devices.
 
 ## Files
 
