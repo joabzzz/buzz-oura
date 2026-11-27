@@ -42,7 +42,7 @@ outside the scope of this version.
    version has no key migration. Keep secrets out of Git and Buzz.
 
 5. In Buzz, open **Settings → Plugins → Manage plugins → Add → Browse** and
-   select the `buzz/` folder. Open **Settings → Oura**, save your Worker origin, and
+   select the `buzz/` folder. Open **Settings → Integrations → Oura**, save your Worker origin, and
    select **Open Oura sign-in in browser**. Sign in to the Worker through Cloudflare
    Access, then connect your Oura account.
 

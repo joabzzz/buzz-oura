@@ -19,6 +19,7 @@ export function apply(ctx) {
   ctx.settingsCards.register({
     id: "oura",
     title: "Oura",
+    group: "Integrations",
     component: function Oura({ active }) {
       const [origin, setOrigin] = useState(() => {
         try {
