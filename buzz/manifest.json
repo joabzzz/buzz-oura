@@ -2,5 +2,8 @@
   "id": "y13.oura",
   "name": "Oura",
   "apiVersion": 1,
-  "description": "Open your self-hosted Oura account connection from Buzz."
+  "description": "Link your Oura account and test its connection in Buzz.",
+  "host": {
+    "networkOrigins": ["https://wearables.joabar.xyz"]
+  }
 }
