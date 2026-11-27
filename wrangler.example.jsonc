@@ -1,0 +1,22 @@
+{
+  "name": "buzz-oura",
+  "main": "backend/worker.js",
+  "compatibility_date": "2026-11-27",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "oura.example.com", "custom_domain": true }],
+  "observability": { "enabled": false },
+  "vars": {
+    "PUBLIC_ORIGIN": "https://oura.example.com",
+    "ACCESS_ISSUER": "https://your-team.cloudflareaccess.com",
+    "ACCESS_AUDIENCE": "your-access-application-audience",
+  },
+  "d1_databases": [
+    {
+      "binding": "OURA_DB",
+      "database_name": "buzz-oura",
+      "database_id": "replace-with-database-id",
+      "migrations_dir": "migrations",
+    },
+  ],
+}
