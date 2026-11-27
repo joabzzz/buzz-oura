@@ -8,7 +8,7 @@ const origin = "https://oura.example.com";
 const callback = "/oauth/oura/callback";
 const key = "12".repeat(32);
 
-function fixture(exchange) {
+function fixture(exchange, fetchOura) {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(
     readFileSync(
@@ -42,6 +42,7 @@ function fixture(exchange) {
   const worker = createWorker({
     authenticate: (request) => request.headers.get("test-owner"),
     exchange,
+    fetchOura,
   });
   const env = {
     PUBLIC_ORIGIN: origin,
@@ -131,10 +132,10 @@ test("authenticates, binds callback to the initiating account, encrypts tokens, 
     JSON.parse(new TextDecoder().decode(plaintext)).refreshToken,
     "refresh-token-test",
   );
-  assert.match(await (await send("/account")).text(), /Connected/);
+  assert.match(await (await send("/account")).text(), /Account linked/);
   assert.doesNotMatch(
     await (await send("/account", { owner: "bob" })).text(),
-    /Connected/,
+    /Account linked/,
   );
   assert.equal(
     (await send("/account/disconnect", { method: "POST" })).status,
@@ -192,4 +193,31 @@ test("production authentication fails closed for missing or malformed Access ass
     );
     assert.equal(response.status, 401);
   }
+});
+
+test("checks only the signed-in account and never returns Oura data", async () => {
+  let status = 200;
+  let checks = 0;
+  const { send } = fixture(token, async (url, options) => {
+    checks++;
+    assert.equal(url.origin, "https://api.ouraring.com");
+    assert.equal(url.pathname, "/v2/usercollection/daily_sleep");
+    assert.equal(options.headers.Authorization, "Bearer access-token-test");
+    return Response.json({ data: ["private-test-record"] }, { status });
+  });
+  assert.equal((await send("/account/status", { owner: "" })).status, 401);
+  assert.match(await (await send("/account/status")).text(), /No Oura account/);
+  assert.equal((await send(await authorize(send))).status, 303);
+  assert.match(
+    await (await send("/account/status", { owner: "bob" })).text(),
+    /No Oura account/,
+  );
+  assert.equal(checks, 0);
+  const html = await (await send("/account/status")).text();
+  assert.match(html, /Oura accepted the API request/);
+  assert.doesNotMatch(html, /private-test-record|access-token-test/);
+  status = 401;
+  assert.equal((await send("/account/status")).status, 409);
+  status = 429;
+  assert.equal((await send("/account/status")).status, 502);
 });
