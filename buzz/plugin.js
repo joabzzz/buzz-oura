@@ -151,6 +151,7 @@ export const inject = [
   "host",
   "relay",
   "pages",
+  "agents",
 ];
 
 export function apply(ctx) {
@@ -174,27 +175,143 @@ export function apply(ctx) {
   const subscribeViewer = (listener) => ctx.relay.subscribe(listener);
   const alwaysActive = () => true;
 
-  async function request(credential, test = false) {
+  async function workerRequest(path, credential, method = "GET") {
     const response = await ctx.host.request({
-      url:
-        managedOrigin + (test ? "/buzz/connection/test" : "/buzz/connection"),
-      method: test ? "POST" : "GET",
+      url: managedOrigin + path,
+      method,
       headers: {
         Authorization: `Bearer ${credential}`,
         Accept: "application/json",
       },
       timeoutMs: 13_000,
     });
-    const result = JSON.parse(response.body);
-    if (response.status === 401 && result.state === "disconnected")
+    return { status: response.status, result: JSON.parse(response.body) };
+  }
+
+  async function request(credential, test = false) {
+    const { status, result } = await workerRequest(
+      test ? "/buzz/connection/test" : "/buzz/connection",
+      credential,
+      test ? "POST" : "GET",
+    );
+    if (status === 401 && result.state === "disconnected")
       return result;
     if (
-      response.status === 200 &&
+      status === 200 &&
       ["connected", "reconnect_required", "test_failed"].includes(result.state)
     )
       return result;
     throw new Error("Connection check failed");
   }
+
+  ctx.agents.addTool({
+    name: "oura_get_deep_sleep",
+    description:
+      "Read the owner's Oura deep-sleep durations in the current private one-on-one chat. Call only when your owner asks for their sleep data. For a chart, plot the returned days and durations in minutes with Buzz's native buzz-chart block. A null duration is a missing night. Keep the result in the current chat.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        days: { type: "integer", minimum: 1, maximum: 30, default: 30 },
+      },
+      additionalProperties: false,
+    },
+    async call(client, context, { days = 30 }) {
+      if (!Number.isInteger(days) || days < 1 || days > 30)
+        throw new Error("Choose between 1 and 30 nights.");
+      const viewer = getViewer();
+      const { generation, session } = ctx.relay.snapshot();
+      const channelId = context.channel;
+      const privateChatError =
+        "Use Oura in a private one-on-one chat with your owner.";
+      if (!viewer || client.owner !== viewer || !channelId || client.key === viewer)
+        throw new Error(privateChatError);
+
+      const checkChat = () => {
+        client.signal?.throwIfAborted();
+        const current = ctx.relay.snapshot();
+        const channel = session.channels.list().channels.find(
+          (item) => item.id === channelId,
+        );
+        if (
+          current.viewer !== viewer ||
+          current.session !== session ||
+          current.generation !== generation ||
+          current.status !== "ready" ||
+          current.cached ||
+          !channel ||
+          channel.metadataPending ||
+          channel.metadataCached ||
+          channel.cached ||
+          channel.archived ||
+          channel.readOnly ||
+          channel.huddle ||
+          !(channel.channelType === "dm" || channel.channelType === "solo") ||
+          (channel.visibility ?? (channel.private ? "private" : undefined)) !==
+            "private" ||
+          channel.members?.length !== 2 ||
+          !channel.members.includes(viewer) ||
+          !channel.members.includes(client.key)
+        )
+          throw new Error(privateChatError);
+      };
+      const confirmed = await session.channels.refreshRoster?.(channelId, {
+        consistency: "strong",
+        signal: client.signal,
+      });
+      if (!confirmed) throw new Error(privateChatError);
+      checkChat();
+      const { credential } = readDevice(viewer);
+      if (readSettings().origin !== managedOrigin || !credential)
+        throw new Error(
+          "Sign in under Buzz Settings → Integrations → Oura to connect this device.",
+        );
+
+      let response;
+      try {
+        response = await workerRequest(
+          `/buzz/deep-sleep?days=${days}`,
+          credential,
+        );
+      } catch {
+        throw new Error("Oura sleep data is temporarily unavailable.");
+      }
+      checkChat();
+      if (readDevice(viewer).credential !== credential)
+        throw new Error("Your Oura connection changed. Try again.");
+
+      const { result, status } = response;
+      if (status === 403 && result?.state === "sleep_access_required")
+        throw new Error(
+          "In Buzz Settings → Integrations → Oura, choose Enable sleep access and approve it in your browser. This uses your existing Oura authorization.",
+        );
+      if (
+        status === 401 ||
+        result?.state === "reconnect_required" ||
+        result?.state === "sleep_denied"
+      )
+        throw new Error(
+          "Open Buzz Settings → Integrations → Oura to reconnect and allow sleep access.",
+        );
+      if (
+        status !== 200 ||
+        result?.state !== "ready" ||
+        !Array.isArray(result.nights) ||
+        result.nights.length !== days
+      )
+        throw new Error("Oura sleep data is temporarily unavailable.");
+      const nights = result.nights.map((record) => {
+        const { day, seconds } = record ?? {};
+        if (
+          typeof day !== "string" ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(day) ||
+          (seconds !== null && (!Number.isSafeInteger(seconds) || seconds < 0))
+        )
+          throw new Error("Oura returned an invalid sleep record.");
+        return { day, deep_sleep_seconds: seconds };
+      });
+      return JSON.stringify({ source: "Oura", nights });
+    },
+  });
 
   function externalAction(label, url, primary, beforeOpen) {
     return h(
@@ -390,8 +507,14 @@ export function apply(ctx) {
             );
             return;
           }
+          if (saved.pending.readSleep && next.canReadSleep !== true) {
+            setMessage("Approve sleep access in your browser and return to Buzz.");
+            return;
+          }
           saveDevice(viewer, { credential: authorization });
           setCode("");
+          setCandidate(null);
+          resetAttempt((revision) => revision + 1);
         } else {
           if (saved.credential !== authorization) return;
           if (next.state === "disconnected")
@@ -503,10 +626,14 @@ export function apply(ctx) {
         : (result?.state ?? (credential ? "checking" : "disconnected"));
     const [label, summary] = connectionStates[state];
     const reconnect = result?.state === "reconnect_required";
+    const canReadSleep = state === "connected" && result.canReadSleep === true;
+    const enableSleep = state === "connected" && !canReadSleep;
     const signInAttempt = pending || candidate;
     const signInUrl = new URL(settings.signIn);
     if (hosted && signInAttempt)
       signInUrl.searchParams.set("buzz", signInAttempt.attempt);
+    if (enableSleep || pending?.readSleep)
+      signInUrl.searchParams.set("access", "sleep");
     const connectLabel = pending
       ? "Open sign-in again"
       : reconnect
@@ -572,6 +699,8 @@ export function apply(ctx) {
           : summary,
       ),
       checked && h("small", null, checked),
+      canReadSleep &&
+        h("small", null, "Sleep access is enabled in private chats with your agents."),
       h(
         "div",
         { className: "oura-actions" },
@@ -585,6 +714,10 @@ export function apply(ctx) {
                 { type: "button", disabled: true },
                 "Preparing sign-in…",
               )),
+        enableSleep && candidate &&
+          externalAction("Enable sleep access", signInUrl.href, true, () =>
+            begin({ ...candidate, readSleep: true }),
+          ),
         pending &&
           h(
             Button,
@@ -645,7 +778,7 @@ export function apply(ctx) {
         ),
       message && h("p", { role: "alert" }, message),
       h(Advanced, { settings, save: saveSettings, active: eligible }),
-      h("small", null, "Plugin v0.2.0"),
+      h("small", null, "Plugin v0.3.0"),
     );
   }
 
