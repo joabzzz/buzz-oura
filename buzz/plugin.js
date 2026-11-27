@@ -15,7 +15,11 @@ const connectionStates = {
   checking: ["Checking…", "Checking Oura account status."],
   disconnected: [
     "Not connected",
-    "Connect your Oura account to check its connection in Buzz.",
+    "Sign in to use your daily Oura data in private chats with your agents.",
+  ],
+  needs_link: [
+    "Finish connecting",
+    "Sign in to link your existing Oura account for sleep, activity, and readiness.",
   ],
   pending: [
     "Finish in browser",
@@ -23,7 +27,7 @@ const connectionStates = {
   ],
   connected: [
     "Connected",
-    "Your Oura account is linked to this Buzz identity on this device.",
+    "Your agents can read your Oura sleep, activity, and readiness in private chats.",
   ],
   reconnect_required: [
     "Reconnect required",
@@ -45,6 +49,23 @@ const labels = [
 const deviceKey = (viewer) => `y13.oura.device.${viewer}`;
 const deadline = (attempt) => Number(attempt.slice(0, 13));
 const returnGrace = 5 * 60_000;
+const reportRange = { type: "integer", minimum: 1, maximum: 30, default: 30 };
+const dailyMetrics = ["sleep", "activity", "readiness"];
+
+function readDay(day) {
+  if (typeof day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(day))
+    throw new Error("Oura returned an invalid date.");
+  return day;
+}
+
+function readMeasurement(value, max = Number.MAX_SAFE_INTEGER) {
+  if (
+    value !== null &&
+    (!Number.isSafeInteger(value) || value < 0 || value > max)
+  )
+    throw new Error("Oura returned an invalid measurement.");
+  return value;
+}
 
 function workerOrigin(value) {
   const url = new URL(value.trim() || managedOrigin);
@@ -194,8 +215,7 @@ export function apply(ctx) {
       credential,
       test ? "POST" : "GET",
     );
-    if (status === 401 && result.state === "disconnected")
-      return result;
+    if (status === 401 && result.state === "disconnected") return result;
     if (
       status === 200 &&
       ["connected", "reconnect_required", "test_failed"].includes(result.state)
@@ -204,112 +224,163 @@ export function apply(ctx) {
     throw new Error("Connection check failed");
   }
 
+  async function readReport(client, context, days, path, rowKey) {
+    if (!Number.isInteger(days) || days < 1 || days > 30)
+      throw new Error("Choose between 1 and 30 nights.");
+    const viewer = getViewer();
+    const { generation, session } = ctx.relay.snapshot();
+    const channelId = context.channel;
+    const privateChatError =
+      "Use Oura in a private one-on-one chat with your owner.";
+    if (
+      !viewer ||
+      client.owner !== viewer ||
+      !channelId ||
+      client.key === viewer
+    )
+      throw new Error(privateChatError);
+
+    const checkChat = () => {
+      client.signal?.throwIfAborted();
+      const current = ctx.relay.snapshot();
+      const channel = session.channels
+        .list()
+        .channels.find((item) => item.id === channelId);
+      if (
+        current.viewer !== viewer ||
+        current.session !== session ||
+        current.generation !== generation ||
+        current.status !== "ready" ||
+        current.cached ||
+        !channel ||
+        channel.metadataPending ||
+        channel.metadataCached ||
+        channel.cached ||
+        channel.archived ||
+        channel.readOnly ||
+        channel.huddle ||
+        !(channel.channelType === "dm" || channel.channelType === "solo") ||
+        (channel.visibility ?? (channel.private ? "private" : undefined)) !==
+          "private" ||
+        channel.members?.length !== 2 ||
+        !channel.members.includes(viewer) ||
+        !channel.members.includes(client.key)
+      )
+        throw new Error(privateChatError);
+    };
+    const confirmed = await session.channels.refreshRoster?.(channelId, {
+      consistency: "strong",
+      signal: client.signal,
+    });
+    if (!confirmed) throw new Error(privateChatError);
+    checkChat();
+    const { credential } = readDevice(viewer);
+    if (readSettings().origin !== managedOrigin || !credential)
+      throw new Error(
+        "Choose Sign in to Oura under Buzz Settings → Integrations → Oura.",
+      );
+
+    let response;
+    try {
+      response = await workerRequest(path, credential);
+    } catch {
+      throw new Error("Oura data is temporarily unavailable.");
+    }
+    checkChat();
+    if (readDevice(viewer).credential !== credential)
+      throw new Error("Your Oura connection changed. Try again.");
+
+    const { result, status } = response;
+    if (
+      status === 403 &&
+      ["sleep_access_required", "daily_access_required"].includes(result?.state)
+    )
+      throw new Error(
+        "Choose Sign in to Oura under Buzz Settings → Integrations → Oura to link your existing account to Buzz.",
+      );
+    if (
+      status === 401 ||
+      result?.state === "reconnect_required" ||
+      result?.state === "sleep_denied" ||
+      result?.state === "scope_denied"
+    )
+      throw new Error(
+        "Open Buzz Settings → Integrations → Oura to reconnect your account.",
+      );
+    if (
+      status !== 200 ||
+      result?.state !== "ready" ||
+      !Array.isArray(result[rowKey]) ||
+      result[rowKey].length !== days
+    )
+      throw new Error("Oura data is temporarily unavailable.");
+    return result[rowKey];
+  }
+
   ctx.agents.addTool({
     name: "oura_get_deep_sleep",
     description:
       "Read the owner's Oura deep-sleep durations in the current private one-on-one chat. Call only when your owner asks for their sleep data. For a chart, plot the returned days and durations in minutes with Buzz's native buzz-chart block. A null duration is a missing night. Keep the result in the current chat.",
     inputSchema: {
       type: "object",
-      properties: {
-        days: { type: "integer", minimum: 1, maximum: 30, default: 30 },
-      },
+      properties: { days: reportRange },
       additionalProperties: false,
     },
     async call(client, context, { days = 30 }) {
-      if (!Number.isInteger(days) || days < 1 || days > 30)
-        throw new Error("Choose between 1 and 30 nights.");
-      const viewer = getViewer();
-      const { generation, session } = ctx.relay.snapshot();
-      const channelId = context.channel;
-      const privateChatError =
-        "Use Oura in a private one-on-one chat with your owner.";
-      if (!viewer || client.owner !== viewer || !channelId || client.key === viewer)
-        throw new Error(privateChatError);
-
-      const checkChat = () => {
-        client.signal?.throwIfAborted();
-        const current = ctx.relay.snapshot();
-        const channel = session.channels.list().channels.find(
-          (item) => item.id === channelId,
-        );
-        if (
-          current.viewer !== viewer ||
-          current.session !== session ||
-          current.generation !== generation ||
-          current.status !== "ready" ||
-          current.cached ||
-          !channel ||
-          channel.metadataPending ||
-          channel.metadataCached ||
-          channel.cached ||
-          channel.archived ||
-          channel.readOnly ||
-          channel.huddle ||
-          !(channel.channelType === "dm" || channel.channelType === "solo") ||
-          (channel.visibility ?? (channel.private ? "private" : undefined)) !==
-            "private" ||
-          channel.members?.length !== 2 ||
-          !channel.members.includes(viewer) ||
-          !channel.members.includes(client.key)
-        )
-          throw new Error(privateChatError);
-      };
-      const confirmed = await session.channels.refreshRoster?.(channelId, {
-        consistency: "strong",
-        signal: client.signal,
-      });
-      if (!confirmed) throw new Error(privateChatError);
-      checkChat();
-      const { credential } = readDevice(viewer);
-      if (readSettings().origin !== managedOrigin || !credential)
-        throw new Error(
-          "Sign in under Buzz Settings → Integrations → Oura to connect this device.",
-        );
-
-      let response;
-      try {
-        response = await workerRequest(
-          `/buzz/deep-sleep?days=${days}`,
-          credential,
-        );
-      } catch {
-        throw new Error("Oura sleep data is temporarily unavailable.");
-      }
-      checkChat();
-      if (readDevice(viewer).credential !== credential)
-        throw new Error("Your Oura connection changed. Try again.");
-
-      const { result, status } = response;
-      if (status === 403 && result?.state === "sleep_access_required")
-        throw new Error(
-          "In Buzz Settings → Integrations → Oura, choose Enable sleep access and approve it in your browser. This uses your existing Oura authorization.",
-        );
-      if (
-        status === 401 ||
-        result?.state === "reconnect_required" ||
-        result?.state === "sleep_denied"
-      )
-        throw new Error(
-          "Open Buzz Settings → Integrations → Oura to reconnect and allow sleep access.",
-        );
-      if (
-        status !== 200 ||
-        result?.state !== "ready" ||
-        !Array.isArray(result.nights) ||
-        result.nights.length !== days
-      )
-        throw new Error("Oura sleep data is temporarily unavailable.");
-      const nights = result.nights.map((record) => {
-        const { day, seconds } = record ?? {};
-        if (
-          typeof day !== "string" ||
-          !/^\d{4}-\d{2}-\d{2}$/.test(day) ||
-          (seconds !== null && (!Number.isSafeInteger(seconds) || seconds < 0))
-        )
-          throw new Error("Oura returned an invalid sleep record.");
-        return { day, deep_sleep_seconds: seconds };
-      });
+      const rows = await readReport(
+        client,
+        context,
+        days,
+        `/buzz/deep-sleep?days=${days}`,
+        "nights",
+      );
+      const nights = rows.map(({ day, seconds }) => ({
+        day: readDay(day),
+        deep_sleep_seconds: readMeasurement(seconds),
+      }));
       return JSON.stringify({ source: "Oura", nights });
+    },
+  });
+
+  ctx.agents.addTool({
+    name: "oura_get_daily",
+    description:
+      "Read the owner's Oura daily sleep, activity, or readiness in the current private one-on-one chat. Call only when your owner asks for their Oura data. Each day has its Oura score. Activity also includes steps and active calories in kcal. A null means the data is missing. Use Buzz's native buzz-chart block for charts and keep results in the current chat.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        days: reportRange,
+        metric: { type: "string", enum: dailyMetrics },
+      },
+      required: ["metric"],
+      additionalProperties: false,
+    },
+    async call(client, context, { days = 30, metric }) {
+      if (!dailyMetrics.includes(metric))
+        throw new Error("Choose sleep, activity, or readiness.");
+      const rows = await readReport(
+        client,
+        context,
+        days,
+        `/buzz/daily?metric=${metric}&days=${days}`,
+        "days",
+      );
+      const daily = rows.map(({ day, values }) => ({
+        day: readDay(day),
+        values:
+          values === null
+            ? null
+            : {
+                score: readMeasurement(values?.score, 100),
+                ...(metric === "activity"
+                  ? {
+                      steps: readMeasurement(values?.steps),
+                      active_calories: readMeasurement(values?.active_calories),
+                    }
+                  : {}),
+              },
+      }));
+      return JSON.stringify({ source: "Oura", metric, days: daily });
     },
   });
 
@@ -507,10 +578,6 @@ export function apply(ctx) {
             );
             return;
           }
-          if (saved.pending.readSleep && next.canReadSleep !== true) {
-            setMessage("Approve sleep access in your browser and return to Buzz.");
-            return;
-          }
           saveDevice(viewer, { credential: authorization });
           setCode("");
           setCandidate(null);
@@ -619,27 +686,28 @@ export function apply(ctx) {
       setSettings(next);
     }
 
+    const connection =
+      result?.state === "connected" && result.canReadDaily !== true
+        ? "needs_link"
+        : result?.state;
     const state = !hosted
       ? "browser"
       : pending
         ? "pending"
-        : (result?.state ?? (credential ? "checking" : "disconnected"));
+        : (connection ?? (credential ? "checking" : "disconnected"));
     const [label, summary] = connectionStates[state];
     const reconnect = result?.state === "reconnect_required";
-    const canReadSleep = state === "connected" && result.canReadSleep === true;
-    const enableSleep = state === "connected" && !canReadSleep;
     const signInAttempt = pending || candidate;
     const signInUrl = new URL(settings.signIn);
     if (hosted && signInAttempt)
       signInUrl.searchParams.set("buzz", signInAttempt.attempt);
-    if (enableSleep || pending?.readSleep)
-      signInUrl.searchParams.set("access", "sleep");
     const connectLabel = pending
       ? "Open sign-in again"
       : reconnect
         ? "Reconnect Oura"
         : "Sign in to Oura";
-    const showConnect = hosted && (!credential || pending || reconnect);
+    const showConnect =
+      hosted && (!credential || pending || reconnect || state === "needs_link");
     const lastVerifiedAt = result?.lastVerifiedAt;
     const checked =
       state === "connected" && Number.isSafeInteger(lastVerifiedAt)
@@ -699,8 +767,6 @@ export function apply(ctx) {
           : summary,
       ),
       checked && h("small", null, checked),
-      canReadSleep &&
-        h("small", null, "Sleep access is enabled in private chats with your agents."),
       h(
         "div",
         { className: "oura-actions" },
@@ -714,10 +780,6 @@ export function apply(ctx) {
                 { type: "button", disabled: true },
                 "Preparing sign-in…",
               )),
-        enableSleep && candidate &&
-          externalAction("Enable sleep access", signInUrl.href, true, () =>
-            begin({ ...candidate, readSleep: true }),
-          ),
         pending &&
           h(
             Button,
@@ -778,7 +840,7 @@ export function apply(ctx) {
         ),
       message && h("p", { role: "alert" }, message),
       h(Advanced, { settings, save: saveSettings, active: eligible }),
-      h("small", null, "Plugin v0.3.0"),
+      h("small", null, "Plugin v0.4.0"),
     );
   }
 

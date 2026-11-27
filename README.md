@@ -13,18 +13,20 @@ connection in the desktop app. **Test connection** checks Oura and updates the
 badge. If your browser cannot reopen Buzz, use the connection code shown in
 the browser on the device that started sign-in.
 
-The pilot defaults to `https://wearables.joabar.xyz`. The plugin asks Buzz for
-permission to contact that Worker. The device credential is limited to
-connection status and testing until you select **Enable sleep access** and
-approve it in the browser. This uses your existing Oura authorization. Oura
-tokens stay on the Worker. The connection follows your Buzz identity on this
-device.
+The pilot defaults to `https://wearables.joabar.xyz`. One connection lets your
+Buzz agents read daily sleep, activity, and readiness when you ask in a private
+one-on-one chat. Oura tokens stay on the Worker. The connection follows your
+Buzz identity on this device.
 
-The plugin registers `oura_get_deep_sleep` on Buzz's MCP server. The tool lets
-your agents read up to 30 nights of deep-sleep durations in a private
-one-on-one chat with you. Ask for a chart in that chat to use Buzz's native
-Charts plugin. Sleep access requires the Joabar pilot Worker. Disconnecting
-Oura from its account page revokes the linked Buzz devices.
+The plugin registers two tools on Buzz’s MCP server. Both use the Joabar pilot
+Worker and return up to 30 days.
+
+- `oura_get_deep_sleep` reads nightly deep-sleep duration.
+- `oura_get_daily` reads daily scores for sleep, activity, or readiness.
+  Activity also includes steps and active calories in kcal.
+
+Ask for a chart in a private chat to use Buzz’s native Charts plugin.
+Disconnecting Oura from its account page revokes the linked Buzz devices.
 
 ## Files
 

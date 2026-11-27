@@ -2,7 +2,7 @@
   "id": "y13.oura",
   "name": "Oura",
   "apiVersion": 1,
-  "description": "Connect Oura and let your Buzz agents read deep-sleep duration in private chats.",
+  "description": "Connect Oura to use daily sleep, activity, and readiness in private Buzz chats.",
   "host": {
     "networkOrigins": ["https://wearables.joabar.xyz"]
   }
