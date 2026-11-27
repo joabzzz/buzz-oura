@@ -30,18 +30,20 @@ async function hash(value) {
   );
 }
 
-async function encryptToken(token, owner, key) {
+function bytesFromHex(value) {
+  return Uint8Array.from(value.match(/../g), (byte) => parseInt(byte, 16));
+}
+
+async function importTokenKey(key) {
   if (!/^[a-f\d]{64}$/i.test(key)) throw new Error("Invalid encryption key");
-  const bytes = Uint8Array.from(key.match(/../g), (value) =>
-    parseInt(value, 16),
-  );
-  const encryptionKey = await crypto.subtle.importKey(
-    "raw",
-    bytes,
-    "AES-GCM",
-    false,
-    ["encrypt"],
-  );
+  return crypto.subtle.importKey("raw", bytesFromHex(key), "AES-GCM", false, [
+    "encrypt",
+    "decrypt",
+  ]);
+}
+
+async function encryptToken(token, owner, key) {
+  const encryptionKey = await importTokenKey(key);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv, additionalData: encoder.encode(owner) },
@@ -53,6 +55,29 @@ async function encryptToken(token, owner, key) {
     iv: hex(iv),
     ciphertext: hex(new Uint8Array(ciphertext)),
   });
+}
+
+async function readToken(stored, owner, key) {
+  const envelope = JSON.parse(stored);
+  if (envelope.version !== 1) throw new Error("Unknown token envelope");
+  const plaintext = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: bytesFromHex(envelope.iv),
+      additionalData: encoder.encode(owner),
+    },
+    await importTokenKey(key),
+    bytesFromHex(envelope.ciphertext),
+  );
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+function connectionStatus(message, status = 200) {
+  return reply(
+    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Oura connection status</title><main><h1>Oura connection status</h1><p>${message}</p><a href="/account">Manage Oura account</a></main></html>`,
+    status,
+    { "Content-Type": "text/html; charset=utf-8" },
+  );
 }
 
 let keySet;
@@ -83,6 +108,7 @@ async function verifyOwner(request, env) {
 export function createWorker({
   authenticate = verifyOwner,
   exchange = fetch,
+  fetchOura = fetch,
 } = {}) {
   return {
     async fetch(request, env) {
@@ -91,6 +117,7 @@ export function createWorker({
         return reply("Page not found.", 404);
       const methods = {
         "/account": "GET",
+        "/account/status": "GET",
         "/oauth/oura/start": "POST",
         "/oauth/oura/callback": "GET",
         "/account/disconnect": "POST",
@@ -131,9 +158,56 @@ export function createWorker({
               ? "Disconnect from this Worker"
               : "Connect Oura";
             return reply(
-              `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Oura account</title><main><h1>Oura account</h1><p>${account ? "Connected. To revoke authorization at Oura, remove the app in your Oura account settings." : "Connect your Oura account to this deployment."}</p><form method="post" action="${action}"><button>${label}</button></form></main></html>`,
+              `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Oura account</title><main><h1>Oura account</h1><p>${account ? "Account linked. To revoke authorization at Oura, remove the app in your Oura account settings." : "Connect your Oura account to this deployment."}</p><form method="post" action="${action}"><button>${label}</button></form><p><a href="/account/status">Test connection</a></p></main></html>`,
               200,
               { "Content-Type": "text/html; charset=utf-8" },
+            );
+          }
+          case "/account/status": {
+            const account = await db
+              .prepare(
+                "SELECT token_envelope FROM oura_connections WHERE owner = ?",
+              )
+              .bind(owner)
+              .first();
+            if (!account) return connectionStatus("No Oura account is linked.");
+            const token = await readToken(
+              account.token_envelope,
+              owner,
+              env.OURA_TOKEN_KEY,
+            );
+            if (token.expiresAt <= Date.now())
+              return connectionStatus(
+                "The Oura token expired. Reconnect your Oura account.",
+                409,
+              );
+
+            const endpoint = new URL(
+              "https://api.ouraring.com/v2/usercollection/daily_sleep",
+            );
+            const day = new Date().toISOString().slice(0, 10);
+            endpoint.search = new URLSearchParams({
+              start_date: day,
+              end_date: day,
+            });
+            const result = await fetchOura(endpoint, {
+              headers: { Authorization: `Bearer ${token.accessToken}` },
+              redirect: "error",
+              signal: AbortSignal.timeout(10_000),
+            });
+            await result.body?.cancel();
+            if (result.ok)
+              return connectionStatus(
+                "Connected. Oura accepted the API request.",
+              );
+            if (result.status === 401 || result.status === 403)
+              return connectionStatus(
+                "Oura rejected the token or its permissions. Reconnect your Oura account.",
+                409,
+              );
+            return connectionStatus(
+              "Oura could not complete the test. Try again later.",
+              502,
             );
           }
           case "/account/disconnect":
@@ -254,6 +328,11 @@ export function createWorker({
           }
         }
       } catch {
+        if (url.pathname === "/account/status")
+          return connectionStatus(
+            "The connection could not be checked. Try again later.",
+            503,
+          );
         return reply("The Oura service is temporarily unavailable.", 503);
       }
     },

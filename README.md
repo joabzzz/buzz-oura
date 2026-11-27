@@ -2,8 +2,8 @@
 
 Connect an Oura account from a Buzz page using a self-hosted Cloudflare
 Worker. This first version links and disconnects accounts. It requests
-Oura’s daily scope and stores encrypted OAuth tokens in D1, but does not
-fetch wearable records. Each connection belongs to the authenticated
+Oura’s daily scope and stores encrypted OAuth tokens in D1, without storing wearable
+records. The connection test checks the daily API and discards its response. Each connection belongs to the authenticated
 Cloudflare Access user. Buzz community membership and sharing controls are
 outside the scope of this version.
 
@@ -44,7 +44,9 @@ outside the scope of this version.
 5. In Buzz, open **Settings → Plugins → Manage plugins → Add → Browse** and
    select the `buzz/` folder. Open **Settings → Integrations → Oura**, save your Worker origin, and
    select **Open Oura sign-in in browser**. Sign in to the Worker through Cloudflare
-   Access, then connect your Oura account.
+   Access, then connect your Oura account. The plugin shows the callback and
+   API URLs. **Test connection in browser** checks the linked account once
+   you deploy a Worker with the status route.
 
 Disconnect removes the token envelope from the live D1 database. To revoke
 the provider grant itself, remove the app from your Oura account settings.
@@ -54,3 +56,5 @@ simulated token exchange. A live Oura authorization requires your browser
 and developer app.
 
 This package is available under the [MIT License](LICENSE).
+
+The Oura wordmark identifies the integration and belongs to Oura.
